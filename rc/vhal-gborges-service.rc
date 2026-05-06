@@ -1,0 +1,4 @@
+service vendor.vehicle-hal-gborges /vendor/bin/hw/android.hardware.automotive.vehicle@V4-gborges-service
+    class early_hal
+    user vehicle_network
+    group system inet

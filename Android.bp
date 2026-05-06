@@ -1,0 +1,31 @@
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+cc_binary {
+    name: "android.hardware.automotive.vehicle@V4-gborges-service",
+    vendor: true,
+    relative_install_path: "hw",
+    overrides: ["android.hardware.automotive.vehicle@V4-default-service"],
+    defaults: [
+        "VehicleHalDefaults",
+        "android-automotive-large-parcelable-defaults",
+    ],
+    vintf_fragments: ["manifest/vhal-gborges-service.xml"],
+    init_rc: ["rc/vhal-gborges-service.rc"],
+    local_include_dirs: ["include"],
+    srcs: [
+        "src/VehicleHardware.cpp",
+        "src/VehicleService.cpp",
+    ],
+    static_libs: [
+        "DefaultVehicleHal",
+        "VehicleHalUtils",
+    ],
+    header_libs: [
+        "IVehicleHardware",
+    ],
+    shared_libs: [
+        "libbinder_ndk",
+    ],
+}
