@@ -1,5 +1,7 @@
 #pragma once
 
+#include "PropertyProviderRegistry.h"
+
 #include <IVehicleHardware.h>
 #include <VehicleHalTypes.h>
 #include <VehicleUtils.h>
@@ -36,6 +38,11 @@ class VehicleHardware : public IVehicleHardware {
     void registerOnPropertySetErrorEvent(
             std::unique_ptr<const PropertySetErrorCallback> callback) override;
 
+    // Must be called before AServiceManager_addService() — the registry is
+    // not safe for registerProvider() once binder threads can call us.
+    PropertyProviderRegistry& providerRegistry() { return mRegistry; }
+    ::ndk::ScopedAStatus startProviders();
+
   private:
     // The single place to extend when adding properties.
     void seedProperties();
@@ -54,9 +61,13 @@ class VehicleHardware : public IVehicleHardware {
                      aidlvhal::VehiclePropertyChangeMode changeMode,
                      aidlvhal::RawPropValues defaultValue);
 
+    void onProviderUpdate(aidlvhal::VehiclePropValue value);
+
     mutable std::mutex mLock;
     std::unordered_map<int32_t, aidlvhal::VehiclePropConfig> mConfigs;
     std::unordered_map<PropIdAreaId, aidlvhal::VehiclePropValue, PropIdAreaIdHash> mValues;
+
+    PropertyProviderRegistry mRegistry;
 
     // Set once during init (before binder threadpool starts), then read-only.
     std::unique_ptr<const PropertyChangeCallback> mOnPropertyChangeCallback;

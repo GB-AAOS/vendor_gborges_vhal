@@ -1,0 +1,28 @@
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+cc_library_static {
+    name: "libgborges-vhal-provider-mqtt",
+    vendor: true,
+    defaults: ["VehicleHalDefaults"],
+    srcs: [
+        "src/MqttPropertyProvider.cpp",
+        "src/PropertyTopicCodec.cpp",
+    ],
+    local_include_dirs: ["include"],
+    export_include_dirs: ["include"],
+    static_libs: [
+        "VehicleHalUtils",
+        "libnng",
+    ],
+    header_libs: [
+        "IVehicleHardware",
+        "libgborges-vhal-headers",
+    ],
+    shared_libs: [
+        "libbinder_ndk",
+        "libjsoncpp",
+        "liblog",
+    ],
+}

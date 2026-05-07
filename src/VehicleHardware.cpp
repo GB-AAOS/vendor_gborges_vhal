@@ -30,6 +30,28 @@ using aidlvhal::VehiclePropValue;
 
 VehicleHardware::VehicleHardware() {
     seedProperties();
+    mRegistry.setOnUpdate([this](aidlvhal::VehiclePropValue v) {
+        onProviderUpdate(std::move(v));
+    });
+}
+
+::ndk::ScopedAStatus VehicleHardware::startProviders() {
+    return mRegistry.startAll();
+}
+
+void VehicleHardware::onProviderUpdate(VehiclePropValue value) {
+    if (value.timestamp == 0) {
+        value.timestamp = elapsedRealtimeNano();
+    }
+    {
+        std::lock_guard lg(mLock);
+        mValues[PropIdAreaId{value.prop, value.areaId}] = value;
+    }
+    if (mOnPropertyChangeCallback) {
+        std::vector<VehiclePropValue> batch;
+        batch.push_back(std::move(value));
+        (*mOnPropertyChangeCallback)(std::move(batch));
+    }
 }
 
 void VehicleHardware::addGlobalProp(int32_t propId,
@@ -177,23 +199,37 @@ StatusCode VehicleHardware::setValues(
     std::vector<VehiclePropValue> changed;
     results.reserve(requests.size());
     changed.reserve(requests.size());
-    {
-        std::lock_guard lg(mLock);
-        for (const auto& req : requests) {
-            SetValueResult r{.requestId = req.requestId, .status = StatusCode::OK};
-            auto cfgIt = mConfigs.find(req.value.prop);
-            if (cfgIt == mConfigs.end()) {
-                r.status = StatusCode::INVALID_ARG;
-                results.push_back(std::move(r));
-                continue;
+    for (const auto& req : requests) {
+        SetValueResult r{.requestId = req.requestId, .status = StatusCode::OK};
+
+        // Provider-owned props update the cache asynchronously when the
+        // provider echoes back through onProviderUpdate(); we don't write
+        // mValues here.
+        if (mRegistry.isOwned(req.value.prop, req.value.areaId)) {
+            VehiclePropValue tx = req.value;
+            tx.timestamp = elapsedRealtimeNano();
+            tx.status = VehiclePropertyStatus::AVAILABLE;
+            auto st = mRegistry.writeValue(tx);
+            if (!st.isOk()) {
+                r.status = StatusCode::TRY_AGAIN;
             }
-            VehiclePropValue stored = req.value;
-            stored.timestamp = elapsedRealtimeNano();
-            stored.status = VehiclePropertyStatus::AVAILABLE;
-            mValues[PropIdAreaId{stored.prop, stored.areaId}] = stored;
-            changed.push_back(std::move(stored));
             results.push_back(std::move(r));
+            continue;
         }
+
+        std::lock_guard lg(mLock);
+        auto cfgIt = mConfigs.find(req.value.prop);
+        if (cfgIt == mConfigs.end()) {
+            r.status = StatusCode::INVALID_ARG;
+            results.push_back(std::move(r));
+            continue;
+        }
+        VehiclePropValue stored = req.value;
+        stored.timestamp = elapsedRealtimeNano();
+        stored.status = VehiclePropertyStatus::AVAILABLE;
+        mValues[PropIdAreaId{stored.prop, stored.areaId}] = stored;
+        changed.push_back(std::move(stored));
+        results.push_back(std::move(r));
     }
     (*callback)(std::move(results));
     if (!changed.empty() && mOnPropertyChangeCallback) {

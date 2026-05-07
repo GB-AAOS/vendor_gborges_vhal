@@ -1,15 +1,37 @@
 #define LOG_TAG "GborgesVehicleService"
 
+#include "MqttPropertyProvider.h"
 #include "VehicleHardware.h"
 
 #include <DefaultVehicleHal.h>
+#include <PropertyUtils.h>
+#include <VehicleHalTypes.h>
 
 #include <android/binder_manager.h>
 #include <android/binder_process.h>
 #include <utils/Log.h>
 
-using ::android::hardware::automotive::vehicle::DefaultVehicleHal;
+namespace {
+
+namespace aidlvhal = ::aidl::android::hardware::automotive::vehicle;
+using ::android::hardware::automotive::vehicle::PropIdAreaId;
+using ::android::hardware::automotive::vehicle::toInt;
 using ::android::hardware::automotive::vehicle::gborges::VehicleHardware;
+using ::android::hardware::automotive::vehicle::gborges::mqtt::MqttPropertyProvider;
+
+std::vector<PropIdAreaId> mqttClaims() {
+    using P = aidlvhal::VehicleProperty;
+    return {
+            {toInt(P::PERF_VEHICLE_SPEED), 0},
+            {toInt(P::IGNITION_STATE),     0},
+            {toInt(P::GEAR_SELECTION),     0},
+            {toInt(P::PARKING_BRAKE_ON),   0},
+            {toInt(P::NIGHT_MODE),         0},
+            {toInt(P::HVAC_POWER_ON),      ::android::hardware::automotive::vehicle::HVAC_ALL},
+    };
+}
+
+}  // namespace
 
 int main(int /*argc*/, char* /*argv*/[]) {
     ALOGI("Starting gborges VHAL...");
@@ -20,7 +42,28 @@ int main(int /*argc*/, char* /*argv*/[]) {
     ABinderProcess_startThreadPool();
 
     auto hardware = std::make_unique<VehicleHardware>();
-    auto vhal = ::ndk::SharedRefBase::make<DefaultVehicleHal>(std::move(hardware));
+
+    MqttPropertyProvider::Config mqttCfg;
+    mqttCfg.brokerUrl = "mqtt-tcp://127.0.0.1:1883";
+    mqttCfg.clientId = "gborges-vhal";
+    mqttCfg.topicPrefix = "gborges/vhal";
+    mqttCfg.claimedProperties = mqttClaims();
+
+    auto mqttProvider = std::make_unique<MqttPropertyProvider>(std::move(mqttCfg));
+    auto regSt = hardware->providerRegistry().registerProvider(std::move(mqttProvider));
+    if (!regSt.isOk()) {
+        ALOGE("MQTT provider registration failed: %s", regSt.getDescription().c_str());
+        return 1;
+    }
+    auto startSt = hardware->startProviders();
+    if (!startSt.isOk()) {
+        // Don't fail boot for transient provider issues (e.g. broker not yet
+        // up); NNG will reconnect once the broker comes online.
+        ALOGE("provider startup failed: %s", startSt.getDescription().c_str());
+    }
+
+    auto vhal = ::ndk::SharedRefBase::make<
+            ::android::hardware::automotive::vehicle::DefaultVehicleHal>(std::move(hardware));
 
     binder_exception_t err = AServiceManager_addService(
             vhal->asBinder().get(),
