@@ -151,8 +151,11 @@ void VehicleHardware::seedProperties() {
     addAreaProp(toInt(VehicleProperty::HVAC_POWER_ON), HVAC_ALL, PA::READ_WRITE,
                 PCM::ON_CHANGE, RawPropValues{.int32Values = {1}});
 
-    // VHAL liveness — DefaultVehicleHal pushes its own heartbeat values; we
-    // only need to declare the property and opt out of variable update rate.
+    // Display brightness (0–100). CarPowerService writes this.
+    addGlobalProp(toInt(VehicleProperty::DISPLAY_BRIGHTNESS), PA::READ_WRITE,
+                  PCM::ON_CHANGE, RawPropValues{.int32Values = {100}});
+
+    // VHAL liveness — DefaultVehicleHal pushes its own heartbeat values
     addGlobalProp(toInt(VehicleProperty::VHAL_HEARTBEAT), PA::READ, PCM::ON_CHANGE,
                   RawPropValues{.int64Values = {0}},
                   /* minSampleRate */ 0.0f, /* maxSampleRate */ 0.0f,
@@ -202,33 +205,55 @@ StatusCode VehicleHardware::setValues(
     for (const auto& req : requests) {
         SetValueResult r{.requestId = req.requestId, .status = StatusCode::OK};
 
-        // Provider-owned props update the cache asynchronously when the
-        // provider echoes back through onProviderUpdate(); we don't write
-        // mValues here.
-        if (mRegistry.isOwned(req.value.prop, req.value.areaId)) {
-            VehiclePropValue tx = req.value;
-            tx.timestamp = elapsedRealtimeNano();
-            tx.status = VehiclePropertyStatus::AVAILABLE;
-            auto st = mRegistry.writeValue(tx);
-            if (!st.isOk()) {
-                r.status = StatusCode::TRY_AGAIN;
-            }
-            results.push_back(std::move(r));
-            continue;
-        }
+        VehiclePropValue stored = req.value;
+        stored.timestamp = elapsedRealtimeNano();
+        stored.status = VehiclePropertyStatus::AVAILABLE;
 
-        std::lock_guard lg(mLock);
-        auto cfgIt = mConfigs.find(req.value.prop);
-        if (cfgIt == mConfigs.end()) {
+        bool exists;
+        {
+            std::lock_guard lg(mLock);
+            exists = mConfigs.count(stored.prop) > 0;
+        }
+        if (!exists) {
             r.status = StatusCode::INVALID_ARG;
             results.push_back(std::move(r));
             continue;
         }
-        VehiclePropValue stored = req.value;
-        stored.timestamp = elapsedRealtimeNano();
-        stored.status = VehiclePropertyStatus::AVAILABLE;
-        mValues[PropIdAreaId{stored.prop, stored.areaId}] = stored;
-        changed.push_back(std::move(stored));
+
+        // For provider-owned props, fan out to the provider (e.g. MQTT
+        // publish). The VHAL cache is the source of truth.
+        const bool owned = mRegistry.isOwned(stored.prop, stored.areaId);
+        if (owned) {
+            auto st = mRegistry.writeValue(stored);
+            if (!st.isOk()) {
+                ALOGW("provider writeValue failed for prop=0x%x area=%d: %s",
+                      stored.prop, stored.areaId, st.getDescription().c_str());
+            }
+        }
+
+        {
+            std::lock_guard lg(mLock);
+            mValues[PropIdAreaId{stored.prop, stored.areaId}] = stored;
+        }
+
+        std::string vsum;
+        if (!stored.value.int32Values.empty()) {
+            vsum = "int32=" + std::to_string(stored.value.int32Values[0]);
+        } else if (!stored.value.int64Values.empty()) {
+            vsum = "int64=" + std::to_string(stored.value.int64Values[0]);
+        } else if (!stored.value.floatValues.empty()) {
+            vsum = "float=" + std::to_string(stored.value.floatValues[0]);
+        } else if (!stored.value.stringValue.empty()) {
+            vsum = "string=" + stored.value.stringValue;
+        } else {
+            vsum = "(no scalar)";
+        }
+        ALOGI("setValue prop=0x%x area=%d %s %s",
+              stored.prop, stored.areaId,
+              owned ? "provider" : "cache",
+              vsum.c_str());
+
+        changed.push_back(stored);
         results.push_back(std::move(r));
     }
     (*callback)(std::move(results));
@@ -241,8 +266,10 @@ StatusCode VehicleHardware::setValues(
 DumpResult VehicleHardware::dump(const std::vector<std::string>& /*options*/) {
     std::lock_guard lg(mLock);
     DumpResult r;
-    r.callerShouldDumpState = false;
-    r.buffer = "gborges VehicleHardware: " + std::to_string(mConfigs.size()) + " properties\n";
+    r.callerShouldDumpState = true;
+    r.buffer = "gborges VehicleHardware: " + std::to_string(mConfigs.size()) +
+               " properties, " + std::to_string(mRegistry.providerCount()) +
+               " providers\n";
     return r;
 }
 

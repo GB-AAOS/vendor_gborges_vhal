@@ -28,6 +28,7 @@ std::vector<PropIdAreaId> mqttClaims() {
             {toInt(P::PARKING_BRAKE_ON),   0},
             {toInt(P::NIGHT_MODE),         0},
             {toInt(P::HVAC_POWER_ON),      ::android::hardware::automotive::vehicle::HVAC_ALL},
+            {toInt(P::DISPLAY_BRIGHTNESS), 0},
     };
 }
 

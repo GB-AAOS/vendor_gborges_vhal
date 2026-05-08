@@ -10,7 +10,10 @@
 #include <nng/nng.h>
 #include <nng/protocol/mqtt/mqtt.h>
 
+#include <algorithm>
+#include <cstdio>
 #include <cstring>
+#include <string>
 
 namespace android::hardware::automotive::vehicle::gborges::mqtt {
 
@@ -19,6 +22,35 @@ namespace codec_ns = ::android::hardware::automotive::vehicle::gborges::mqtt::co
 
 ::ndk::ScopedAStatus statusFromException(binder_exception_t ex, const char* msg) {
     return ::ndk::ScopedAStatus::fromExceptionCodeWithMessage(ex, msg);
+}
+
+std::string summarizeValue(const aidlvhal::VehiclePropValue& v) {
+    char buf[192];
+    const auto& rv = v.value;
+    if (!rv.int32Values.empty()) {
+        std::snprintf(buf, sizeof(buf), "int32[%zu]={%d%s}",
+                      rv.int32Values.size(), rv.int32Values[0],
+                      rv.int32Values.size() > 1 ? ",..." : "");
+    } else if (!rv.int64Values.empty()) {
+        std::snprintf(buf, sizeof(buf), "int64[%zu]={%lld%s}",
+                      rv.int64Values.size(),
+                      static_cast<long long>(rv.int64Values[0]),
+                      rv.int64Values.size() > 1 ? ",..." : "");
+    } else if (!rv.floatValues.empty()) {
+        std::snprintf(buf, sizeof(buf), "float[%zu]={%.4f%s}",
+                      rv.floatValues.size(),
+                      static_cast<double>(rv.floatValues[0]),
+                      rv.floatValues.size() > 1 ? ",..." : "");
+    } else if (!rv.stringValue.empty()) {
+        std::snprintf(buf, sizeof(buf), "str=\"%.*s\"",
+                      static_cast<int>(std::min<size_t>(rv.stringValue.size(), 80)),
+                      rv.stringValue.data());
+    } else if (!rv.byteValues.empty()) {
+        std::snprintf(buf, sizeof(buf), "bytes[%zu]", rv.byteValues.size());
+    } else {
+        std::snprintf(buf, sizeof(buf), "<empty>");
+    }
+    return std::string(buf);
 }
 
 }  // namespace
@@ -38,6 +70,8 @@ void MqttPropertyProvider::setUpdateCallback(PropertyUpdate cb) {
     mUpdateCb = std::move(cb);
 }
 
+// TODO: WE ARE MIXIN SCOPES ::ndk::ScopedAStatus, ::ndk::ScopedAStatus statusFromException and binder
+// Should never be in this file.
 ::ndk::ScopedAStatus MqttPropertyProvider::start() {
     if (mRunning.exchange(true)) {
         return ::ndk::ScopedAStatus::ok();
@@ -70,8 +104,6 @@ void MqttPropertyProvider::setUpdateCallback(PropertyUpdate cb) {
 
     rv = nng_dialer_start(mDialer, NNG_FLAG_NONBLOCK);
     if (rv != 0) {
-        // Non-fatal: NNG retries with exponential backoff up to
-        // NNG_OPT_MQTT_RECONNECT_BACKOFF_MAX.
         ALOGW("nng_dialer_start: %s (will reconnect)", nng_strerror(rv));
     }
     ALOGI("MQTT provider started, broker=%s clientId=%s prefix=%s claimed=%zu",
@@ -126,8 +158,6 @@ void MqttPropertyProvider::setUpdateCallback(PropertyUpdate cb) {
 }
 
 void MqttPropertyProvider::recvLoop() {
-    // Safe to subscribe before CONNACK: NNG queues the SUBSCRIBE and replays
-    // it on every (re)connect.
     std::string filter = codec_ns::cmdSubscribeFilter(mConfig.topicPrefix);
     nng_mqtt_topic_qos sub = {
             .qos = static_cast<uint8_t>(mConfig.qos),
@@ -158,9 +188,14 @@ void MqttPropertyProvider::recvLoop() {
         uint32_t payloadLen = 0;
         uint8_t* payloadPtr =
                 nng_mqtt_msg_get_publish_payload(msg, &payloadLen);
-        if (topicPtr && topicLen > 0) {
+
+        // Drop retained /cmd messages
+        const bool retained = nng_mqtt_msg_get_publish_retain(msg) != 0;
+        if (topicPtr && topicLen > 0 && !retained) {
             std::string topic(topicPtr, topicLen);
             handleIncoming(topic, payloadPtr, payloadLen);
+        } else if (retained && topicPtr && topicLen > 0) {
+            ALOGI("dropping retained cmd: %.*s", static_cast<int>(topicLen), topicPtr);
         }
         nng_msg_free(msg);
     }
@@ -169,6 +204,11 @@ void MqttPropertyProvider::recvLoop() {
 void MqttPropertyProvider::handleIncoming(const std::string& topic,
                                           const uint8_t* payload,
                                           size_t payloadLen) {
+    std::string_view sv(reinterpret_cast<const char*>(payload), payloadLen);
+    ALOGI("rx topic=%s len=%zu payload=%.*s",
+          topic.c_str(), payloadLen,
+          static_cast<int>(std::min<size_t>(payloadLen, 256)), sv.data());
+
     int32_t propId = 0;
     int32_t areaId = 0;
     bool isCmd = false;
@@ -186,7 +226,6 @@ void MqttPropertyProvider::handleIncoming(const std::string& topic,
     v.prop = propId;
     v.areaId = areaId;
     v.timestamp = ::android::elapsedRealtimeNano();
-    std::string_view sv(reinterpret_cast<const char*>(payload), payloadLen);
     if (!codec_ns::decode(sv, &v)) {
         ALOGW("decode failed for topic=%s", topic.c_str());
         return;
@@ -194,6 +233,12 @@ void MqttPropertyProvider::handleIncoming(const std::string& topic,
     if (v.timestamp == 0) {
         v.timestamp = ::android::elapsedRealtimeNano();
     }
+
+    ALOGI("dispatch prop=0x%x area=%d %s",
+          propId, areaId, summarizeValue(v).c_str());
+
+    // Echo on the read topic so MQTT subscribers stay in sync with the VHAL.
+    (void)writeValue(v);
 
     PropertyUpdate cb;
     {
