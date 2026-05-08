@@ -33,28 +33,31 @@ PropertyProviderRegistry::~PropertyProviderRegistry() {
         }
         if (mOnUpdate) {
             auto upstream = mOnUpdate;
-            provider->setUpdateCallback([upstream](aidlvhal::VehiclePropValue v) {
-                upstream(std::move(v));
+            ProviderFlags flags = provider->flags();
+            provider->setUpdateCallback([upstream, flags](aidlvhal::VehiclePropValue v) {
+                upstream(std::move(v), flags);
             });
         }
         IPropertyProvider* raw = provider.get();
         for (const auto& key : claims) {
             mIndex[key] = raw;
         }
-        ALOGI("registered provider '%s' for %zu properties",
-              provider->name().c_str(), claims.size());
+        ALOGI("registered provider '%s' for %zu properties (flags=0x%x)",
+              provider->name().c_str(), claims.size(),
+              static_cast<unsigned>(provider->flags()));
         mProviders.push_back(std::move(provider));
     }
     return ::ndk::ScopedAStatus::ok();
 }
 
-void PropertyProviderRegistry::setOnUpdate(IPropertyProvider::PropertyUpdate cb) {
+void PropertyProviderRegistry::setOnUpdate(OnUpdate cb) {
     std::lock_guard lg(mLock);
     mOnUpdate = std::move(cb);
     auto upstream = mOnUpdate;
     for (auto& p : mProviders) {
-        p->setUpdateCallback([upstream](aidlvhal::VehiclePropValue v) {
-            upstream(std::move(v));
+        ProviderFlags flags = p->flags();
+        p->setUpdateCallback([upstream, flags](aidlvhal::VehiclePropValue v) {
+            upstream(std::move(v), flags);
         });
     }
 }

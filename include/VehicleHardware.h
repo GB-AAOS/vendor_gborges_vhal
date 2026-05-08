@@ -61,7 +61,7 @@ class VehicleHardware : public IVehicleHardware {
                      aidlvhal::VehiclePropertyChangeMode changeMode,
                      aidlvhal::RawPropValues defaultValue);
 
-    void onProviderUpdate(aidlvhal::VehiclePropValue value);
+    void onProviderUpdate(aidlvhal::VehiclePropValue value, ProviderFlags flags);
 
     mutable std::mutex mLock;
     std::unordered_map<int32_t, aidlvhal::VehiclePropConfig> mConfigs;

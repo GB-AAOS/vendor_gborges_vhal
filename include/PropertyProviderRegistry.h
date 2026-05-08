@@ -11,6 +11,10 @@ namespace android::hardware::automotive::vehicle::gborges {
 
 class PropertyProviderRegistry {
   public:
+    // Update sink: receives a parsed value plus the originating provider's
+    // flags so VehicleHardware can decide whether to validate or shortcut.
+    using OnUpdate = std::function<void(aidlvhal::VehiclePropValue, ProviderFlags)>;
+
     PropertyProviderRegistry() = default;
     ~PropertyProviderRegistry();
 
@@ -20,7 +24,7 @@ class PropertyProviderRegistry {
     // Returns ILLEGAL_ARGUMENT if any claimed (propId, areaId) is already owned.
     ::ndk::ScopedAStatus registerProvider(std::unique_ptr<IPropertyProvider> provider);
 
-    void setOnUpdate(IPropertyProvider::PropertyUpdate cb);
+    void setOnUpdate(OnUpdate cb);
 
     ::ndk::ScopedAStatus startAll();
     void stopAll();
@@ -38,7 +42,7 @@ class PropertyProviderRegistry {
     mutable std::mutex mLock;
     std::vector<std::unique_ptr<IPropertyProvider>> mProviders;
     std::unordered_map<PropIdAreaId, IPropertyProvider*, PropIdAreaIdHash> mIndex;
-    IPropertyProvider::PropertyUpdate mOnUpdate;
+    OnUpdate mOnUpdate;
 };
 
 }  // namespace android::hardware::automotive::vehicle::gborges

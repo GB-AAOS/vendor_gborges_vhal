@@ -21,6 +21,7 @@ class MqttPropertyProvider : public IPropertyProvider {
         int         keepAliveSecs   = 60;
         int         qos             = 0;
         bool        retainPublishes = true;
+        ProviderFlags flags         = ProviderFlags::Default;
         std::vector<PropIdAreaId> claimedProperties;
     };
 
@@ -29,6 +30,7 @@ class MqttPropertyProvider : public IPropertyProvider {
 
     std::string name() const override { return "mqtt"; }
     std::vector<PropIdAreaId> claimedProperties() const override;
+    ProviderFlags flags() const override { return mConfig.flags; }
     ::ndk::ScopedAStatus start() override;
     ::ndk::ScopedAStatus stop() override;
     ::ndk::ScopedAStatus writeValue(const aidlvhal::VehiclePropValue& value) override;

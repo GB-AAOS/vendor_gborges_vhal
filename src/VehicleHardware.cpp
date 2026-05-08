@@ -2,6 +2,8 @@
 
 #include "VehicleHardware.h"
 
+#include "PropertyValidation.h"
+
 #include <PropertyUtils.h>
 
 #include <utils/Log.h>
@@ -30,8 +32,8 @@ using aidlvhal::VehiclePropValue;
 
 VehicleHardware::VehicleHardware() {
     seedProperties();
-    mRegistry.setOnUpdate([this](aidlvhal::VehiclePropValue v) {
-        onProviderUpdate(std::move(v));
+    mRegistry.setOnUpdate([this](aidlvhal::VehiclePropValue v, ProviderFlags f) {
+        onProviderUpdate(std::move(v), f);
     });
 }
 
@@ -39,7 +41,25 @@ VehicleHardware::VehicleHardware() {
     return mRegistry.startAll();
 }
 
-void VehicleHardware::onProviderUpdate(VehiclePropValue value) {
+void VehicleHardware::onProviderUpdate(VehiclePropValue value, ProviderFlags flags) {
+    if (hasFlag(flags, ProviderFlags::ValidateInbound)) {
+        VehiclePropConfig cfg;
+        {
+            std::lock_guard lg(mLock);
+            auto it = mConfigs.find(value.prop);
+            if (it == mConfigs.end()) {
+                ALOGW("rejecting provider update: unknown prop=0x%x", value.prop);
+                return;
+            }
+            cfg = it->second;
+        }
+        std::string err;
+        if (!validatePropertyWrite(value, cfg, &err)) {
+            ALOGW("rejecting provider update: prop=0x%x area=%d: %s",
+                  value.prop, value.areaId, err.c_str());
+            return;
+        }
+    }
     if (value.timestamp == 0) {
         value.timestamp = elapsedRealtimeNano();
     }
@@ -209,12 +229,24 @@ StatusCode VehicleHardware::setValues(
         stored.timestamp = elapsedRealtimeNano();
         stored.status = VehiclePropertyStatus::AVAILABLE;
 
+        VehiclePropConfig cfg;
         bool exists;
         {
             std::lock_guard lg(mLock);
-            exists = mConfigs.count(stored.prop) > 0;
+            auto it = mConfigs.find(stored.prop);
+            exists = it != mConfigs.end();
+            if (exists) cfg = it->second;
         }
         if (!exists) {
+            r.status = StatusCode::INVALID_ARG;
+            results.push_back(std::move(r));
+            continue;
+        }
+
+        std::string verr;
+        if (!validatePropertyWrite(stored, cfg, &verr)) {
+            ALOGW("rejecting setValues: prop=0x%x area=%d: %s",
+                  stored.prop, stored.areaId, verr.c_str());
             r.status = StatusCode::INVALID_ARG;
             results.push_back(std::move(r));
             continue;

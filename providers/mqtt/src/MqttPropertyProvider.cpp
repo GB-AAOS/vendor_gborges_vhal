@@ -2,6 +2,7 @@
 
 #include "MqttPropertyProvider.h"
 #include "PropertyTopicCodec.h"
+#include "PropertyValidation.h"
 
 #include <utils/Log.h>
 #include <utils/SystemClock.h>
@@ -232,6 +233,15 @@ void MqttPropertyProvider::handleIncoming(const std::string& topic,
     }
     if (v.timestamp == 0) {
         v.timestamp = ::android::elapsedRealtimeNano();
+    }
+
+    if (hasFlag(mConfig.flags, ProviderFlags::ValidateInbound)) {
+        std::string verr;
+        if (!validatePropertyType(propId, v.value, &verr)) {
+            ALOGW("rejecting cmd: prop=0x%x area=%d: %s",
+                  propId, areaId, verr.c_str());
+            return;
+        }
     }
 
     ALOGI("dispatch prop=0x%x area=%d %s",
