@@ -29,6 +29,7 @@ cc_binary {
         "DefaultVehicleHal",
         "VehicleHalUtils",
         "libgborges-vhal-provider-mqtt",
+        "libgborges-vhal-provider-can",
         "libnng",
     ],
     header_libs: [
@@ -37,5 +38,6 @@ cc_binary {
     shared_libs: [
         "libbinder_ndk",
         "libjsoncpp",
+        "libprotobuf-cpp-full",
     ],
 }

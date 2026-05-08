@@ -1,0 +1,47 @@
+// CAN property provider configuration. Default path:
+// /system/etc/gborges/vhal_can_props.pb (textproto).
+
+syntax = "proto3";
+
+package android.hardware.automotive.vehicle.gborges.proto;
+
+// DBC convention. BO_ prefix avoids clashing with glibc's <endian.h> macros.
+enum ByteOrder {
+    BO_LITTLE_ENDIAN = 0;  // Intel: start_bit is the LSB.
+    BO_BIG_ENDIAN    = 1;  // Motorola: start_bit is the MSB.
+}
+
+// VT_ prefix avoids macro/typedef collisions with system headers.
+enum ValueType {
+    VT_INT32   = 0;
+    VT_INT64   = 1;
+    VT_FLOAT   = 2;
+    VT_BOOLEAN = 3;
+}
+
+// One signal in a CAN frame. Physical = (raw_bits as is_signed) * scale + offset.
+message Signal {
+    uint32 can_id      = 1;   // 11-bit, or 29-bit if extended=true.
+    bool   extended    = 2;
+    uint32 dlc         = 3;   // 1..8; 0 means use 8.
+    uint32 start_bit   = 4;
+    uint32 length_bits = 5;
+    ByteOrder byte_order = 6;
+    bool   is_signed   = 7;
+    double scale       = 8;
+    double offset      = 9;
+    ValueType value_type = 10;
+}
+
+// Maps a VehicleProperty (prop_id, area_id) to its rx/tx signals; at least one required.
+message PropertyMapping {
+    int32  prop_id = 1;
+    int32  area_id = 2;
+    Signal rx = 3;
+    Signal tx = 4;
+}
+
+message CanProviderConfig {
+    string bus_name = 1;  // Kernel iface name; defaults to "can0".
+    repeated PropertyMapping properties = 2;
+}

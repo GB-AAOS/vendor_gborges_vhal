@@ -1,0 +1,35 @@
+package {
+    default_applicable_licenses: ["Android-Apache-2.0"],
+}
+
+cc_library_static {
+    name: "libgborges-vhal-provider-can",
+    vendor: true,
+    defaults: ["VehicleHalDefaults"],
+    srcs: [
+        "src/CanFrameCodec.cpp",
+        "src/CanProviderConfig.cpp",
+        "src/CanPropertyProvider.cpp",
+        "proto/can_provider.proto",
+    ],
+    proto: {
+        type: "full",
+        canonical_path_from_root: false,
+        export_proto_headers: true,
+        local_include_dirs: ["proto"],
+    },
+    local_include_dirs: ["include"],
+    export_include_dirs: ["include"],
+    static_libs: [
+        "VehicleHalUtils",
+    ],
+    header_libs: [
+        "IVehicleHardware",
+        "libgborges-vhal-headers",
+    ],
+    shared_libs: [
+        "libbinder_ndk",
+        "liblog",
+        "libprotobuf-cpp-full",
+    ],
+}

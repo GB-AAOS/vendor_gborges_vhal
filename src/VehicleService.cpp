@@ -1,5 +1,7 @@
 #define LOG_TAG "GborgesVehicleService"
 
+#include "CanProviderConfig.h"
+#include "CanPropertyProvider.h"
 #include "MqttPropertyProvider.h"
 #include "VehicleHardware.h"
 
@@ -17,7 +19,11 @@ namespace aidlvhal = ::aidl::android::hardware::automotive::vehicle;
 using ::android::hardware::automotive::vehicle::PropIdAreaId;
 using ::android::hardware::automotive::vehicle::toInt;
 using ::android::hardware::automotive::vehicle::gborges::VehicleHardware;
+using ::android::hardware::automotive::vehicle::gborges::can::CanProviderConfig;
+using ::android::hardware::automotive::vehicle::gborges::can::CanPropertyProvider;
 using ::android::hardware::automotive::vehicle::gborges::mqtt::MqttPropertyProvider;
+
+constexpr const char* kCanConfigPath = "/system/etc/gborges/vhal_can_props.pb";
 
 std::vector<PropIdAreaId> mqttClaims() {
     using P = aidlvhal::VehicleProperty;
@@ -56,6 +62,23 @@ int main(int /*argc*/, char* /*argv*/[]) {
         ALOGE("MQTT provider registration failed: %s", regSt.getDescription().c_str());
         return 1;
     }
+
+    // CAN provider is opt-in: missing/empty textproto = no-op (non-fatal).
+    if (auto canCfg = CanProviderConfig::loadFromFile(kCanConfigPath)) {
+        if (canCfg->claims.empty()) {
+            ALOGI("CAN provider disabled: %s has no property mappings", kCanConfigPath);
+        } else {
+            auto canProvider = std::make_unique<CanPropertyProvider>(std::move(*canCfg));
+            auto canRegSt = hardware->providerRegistry().registerProvider(std::move(canProvider));
+            if (!canRegSt.isOk()) {
+                ALOGE("CAN provider registration failed: %s",
+                      canRegSt.getDescription().c_str());
+            }
+        }
+    } else {
+        ALOGI("CAN provider disabled (no/invalid config at %s)", kCanConfigPath);
+    }
+
     auto startSt = hardware->startProviders();
     if (!startSt.isOk()) {
         // Don't fail boot for transient provider issues (e.g. broker not yet

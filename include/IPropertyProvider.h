@@ -14,23 +14,14 @@ namespace android::hardware::automotive::vehicle::gborges {
 
 namespace aidlvhal = ::aidl::android::hardware::automotive::vehicle;
 
-// Per-provider behaviour switches, packed as a bitfield. `Default` keeps the
-// safe behaviour; opt out only when the provider semantics warrant it.
-//
-//   ValidateInbound — if set, values arriving from this provider via the
-//                     update callback are type/areaId-checked in
-//                     VehicleHardware::onProviderUpdate, and the propId-only
-//                     fast-path runs inside the provider itself when
-//                     applicable. Clear this only when the provider is the
-//                     authoritative source of truth (e.g. a CAN provider
-//                     mirroring a real bus where the frame format is the
-//                     contract and the VHAL is just a shadow). Applies to
-//                     all of the provider's claims uniformly.
+// Per-provider behaviour switches; bits apply uniformly to every claim.
 enum class ProviderFlags : uint32_t {
-    None            = 0,
-    ValidateInbound = 1u << 0,
+    NONE             = 0,
+    VALIDATE_INBOUND = 1u << 0,  // Type/areaId-check inbound values before they reach the cache.
+    WRITE            = 1u << 1,  // Forward VHAL setValue() to the provider's writeValue().
+    READ             = 1u << 2,  // Propagate provider updates into the VHAL cache and subscribers.
 
-    Default         = ValidateInbound,
+    DEFAULT          = VALIDATE_INBOUND | WRITE | READ,
 };
 
 constexpr ProviderFlags operator|(ProviderFlags a, ProviderFlags b) {
@@ -57,7 +48,7 @@ class IPropertyProvider {
 
     virtual std::string name() const = 0;
     virtual std::vector<PropIdAreaId> claimedProperties() const = 0;
-    virtual ProviderFlags flags() const { return ProviderFlags::Default; }
+    virtual ProviderFlags flags() const { return ProviderFlags::DEFAULT; }
 
     virtual ::ndk::ScopedAStatus start() = 0;
     virtual ::ndk::ScopedAStatus stop() = 0;

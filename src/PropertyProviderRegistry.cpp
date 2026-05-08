@@ -34,7 +34,14 @@ PropertyProviderRegistry::~PropertyProviderRegistry() {
         if (mOnUpdate) {
             auto upstream = mOnUpdate;
             ProviderFlags flags = provider->flags();
-            provider->setUpdateCallback([upstream, flags](aidlvhal::VehiclePropValue v) {
+            const std::string nameForLog = provider->name();
+            provider->setUpdateCallback([upstream, flags, nameForLog](
+                                                aidlvhal::VehiclePropValue v) {
+                if (!hasFlag(flags, ProviderFlags::READ)) {
+                    ALOGV("dropping update from '%s' (READ=0): prop=0x%x",
+                          nameForLog.c_str(), v.prop);
+                    return;
+                }
                 upstream(std::move(v), flags);
             });
         }
@@ -56,7 +63,14 @@ void PropertyProviderRegistry::setOnUpdate(OnUpdate cb) {
     auto upstream = mOnUpdate;
     for (auto& p : mProviders) {
         ProviderFlags flags = p->flags();
-        p->setUpdateCallback([upstream, flags](aidlvhal::VehiclePropValue v) {
+        const std::string nameForLog = p->name();
+        p->setUpdateCallback([upstream, flags, nameForLog](
+                                     aidlvhal::VehiclePropValue v) {
+            if (!hasFlag(flags, ProviderFlags::READ)) {
+                ALOGV("dropping update from '%s' (READ=0): prop=0x%x",
+                      nameForLog.c_str(), v.prop);
+                return;
+            }
             upstream(std::move(v), flags);
         });
     }
@@ -102,6 +116,12 @@ bool PropertyProviderRegistry::isOwned(int32_t propId, int32_t areaId) const {
             return statusFromException(EX_ILLEGAL_ARGUMENT, "no provider for property");
         }
         p = it->second;
+    }
+    if (!hasFlag(p->flags(), ProviderFlags::WRITE)) {
+        // Silent OK so VehicleHardware's cache update still proceeds without an ALOGW.
+        ALOGV("skipping writeValue to '%s' (WRITE=0): prop=0x%x area=%d",
+              p->name().c_str(), value.prop, value.areaId);
+        return ::ndk::ScopedAStatus::ok();
     }
     return p->writeValue(value);
 }

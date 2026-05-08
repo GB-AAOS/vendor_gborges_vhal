@@ -235,7 +235,7 @@ void MqttPropertyProvider::handleIncoming(const std::string& topic,
         v.timestamp = ::android::elapsedRealtimeNano();
     }
 
-    if (hasFlag(mConfig.flags, ProviderFlags::ValidateInbound)) {
+    if (hasFlag(mConfig.flags, ProviderFlags::VALIDATE_INBOUND)) {
         std::string verr;
         if (!validatePropertyType(propId, v.value, &verr)) {
             ALOGW("rejecting cmd: prop=0x%x area=%d: %s",

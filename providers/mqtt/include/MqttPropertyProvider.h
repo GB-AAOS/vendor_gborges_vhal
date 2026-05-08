@@ -21,7 +21,7 @@ class MqttPropertyProvider : public IPropertyProvider {
         int         keepAliveSecs   = 60;
         int         qos             = 0;
         bool        retainPublishes = true;
-        ProviderFlags flags         = ProviderFlags::Default;
+        ProviderFlags flags         = ProviderFlags::DEFAULT;
         std::vector<PropIdAreaId> claimedProperties;
     };
 

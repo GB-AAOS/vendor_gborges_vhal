@@ -42,7 +42,7 @@ VehicleHardware::VehicleHardware() {
 }
 
 void VehicleHardware::onProviderUpdate(VehiclePropValue value, ProviderFlags flags) {
-    if (hasFlag(flags, ProviderFlags::ValidateInbound)) {
+    if (hasFlag(flags, ProviderFlags::VALIDATE_INBOUND)) {
         VehiclePropConfig cfg;
         {
             std::lock_guard lg(mLock);
