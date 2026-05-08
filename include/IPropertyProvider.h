@@ -16,12 +16,30 @@ namespace aidlvhal = ::aidl::android::hardware::automotive::vehicle;
 
 // Per-provider behaviour switches; bits apply uniformly to every claim.
 enum class ProviderFlags : uint32_t {
-    NONE             = 0,
-    VALIDATE_INBOUND = 1u << 0,  // Type/areaId-check inbound values before they reach the cache.
-    WRITE            = 1u << 1,  // Forward VHAL setValue() to the provider's writeValue().
-    READ             = 1u << 2,  // Propagate provider updates into the VHAL cache and subscribers.
+    NONE = 0,
 
-    DEFAULT          = VALIDATE_INBOUND | WRITE | READ,
+    // Run propId-only type/cardinality and areaId-membership checks on values
+    // flowing in from this provider before they hit the VHAL cache.
+    VALIDATE_INBOUND = 1u << 0,
+
+    // VHAL → provider gate. Forward setValue() into provider->writeValue()
+    // for owned, listened, or ACCEPT_ALL_WRITES props. Clear to mute fully.
+    WRITE = 1u << 1,
+
+    // Provider → VHAL gate. Propagate the provider's emissions through
+    // VehicleHardware::onProviderUpdate to the cache and AIDL subscribers.
+    READ = 1u << 2,
+
+    // With WRITE: provider accepts every setValue regardless of claims or
+    // listenedSignals. Clear = accept only the (claims ∪ listened) subset.
+    ACCEPT_ALL_WRITES = 1u << 3,
+
+    // Marks the provider as load-bearing. Under strict build mode
+    // (-DGBORGES_VHAL_STRICT_PROVIDERS=1) a start() failure aborts boot;
+    // under soft mode (default) it is logged and ignored.
+    REQUIRED = 1u << 4,
+
+    DEFAULT = VALIDATE_INBOUND | WRITE | READ,
 };
 
 constexpr ProviderFlags operator|(ProviderFlags a, ProviderFlags b) {
@@ -49,6 +67,10 @@ class IPropertyProvider {
     virtual std::string name() const = 0;
     virtual std::vector<PropIdAreaId> claimedProperties() const = 0;
     virtual ProviderFlags flags() const { return ProviderFlags::DEFAULT; }
+
+    // Extra (prop, area) keys this provider wants writeValue() forwarded for,
+    // beyond its claims. Snapshotted once at registration; never re-queried.
+    virtual std::vector<PropIdAreaId> listenedSignals() const { return {}; }
 
     virtual ::ndk::ScopedAStatus start() = 0;
     virtual ::ndk::ScopedAStatus stop() = 0;

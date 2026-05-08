@@ -40,4 +40,10 @@ cc_binary {
         "libjsoncpp",
         "libprotobuf-cpp-full",
     ],
+    cflags: [
+        // Strictness for providers marked ProviderFlags::REQUIRED.
+        //   0 = soft: log start() failures, keep booting (default).
+        //   1 = strict: any REQUIRED provider start() failure aborts boot.
+        "-DGBORGES_VHAL_STRICT_PROVIDERS=0",
+    ],
 }

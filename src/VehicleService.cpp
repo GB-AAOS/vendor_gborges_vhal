@@ -81,9 +81,10 @@ int main(int /*argc*/, char* /*argv*/[]) {
 
     auto startSt = hardware->startProviders();
     if (!startSt.isOk()) {
-        // Don't fail boot for transient provider issues (e.g. broker not yet
-        // up); NNG will reconnect once the broker comes online.
         ALOGE("provider startup failed: %s", startSt.getDescription().c_str());
+#if GBORGES_VHAL_STRICT_PROVIDERS
+        return 1;
+#endif
     }
 
     auto vhal = ::ndk::SharedRefBase::make<

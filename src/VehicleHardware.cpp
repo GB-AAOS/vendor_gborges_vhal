@@ -252,15 +252,13 @@ StatusCode VehicleHardware::setValues(
             continue;
         }
 
-        // For provider-owned props, fan out to the provider (e.g. MQTT
-        // publish). The VHAL cache is the source of truth.
+        // Fan out to providers (owner + listeners + ACCEPT_ALL_WRITES).
+        // The registry silently returns OK when there are no recipients,
+        // so calling unconditionally is cheap on cache-only props.
         const bool owned = mRegistry.isOwned(stored.prop, stored.areaId);
-        if (owned) {
-            auto st = mRegistry.writeValue(stored);
-            if (!st.isOk()) {
-                ALOGW("provider writeValue failed for prop=0x%x area=%d: %s",
-                      stored.prop, stored.areaId, st.getDescription().c_str());
-            }
+        if (auto st = mRegistry.writeValue(stored); !st.isOk()) {
+            ALOGW("provider writeValue failed for prop=0x%x area=%d: %s",
+                  stored.prop, stored.areaId, st.getDescription().c_str());
         }
 
         {

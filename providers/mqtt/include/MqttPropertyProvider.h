@@ -21,7 +21,9 @@ class MqttPropertyProvider : public IPropertyProvider {
         int         keepAliveSecs   = 60;
         int         qos             = 0;
         bool        retainPublishes = true;
-        ProviderFlags flags         = ProviderFlags::DEFAULT;
+        // Broker mirrors every VHAL setValue, not just the props it claims.
+        ProviderFlags flags         = ProviderFlags::DEFAULT
+                                    | ProviderFlags::ACCEPT_ALL_WRITES;
         std::vector<PropIdAreaId> claimedProperties;
     };
 

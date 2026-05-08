@@ -4,6 +4,12 @@
 
 #include <utils/Log.h>
 
+#include <array>
+
+#ifndef GBORGES_VHAL_STRICT_PROVIDERS
+#define GBORGES_VHAL_STRICT_PROVIDERS 0
+#endif
+
 namespace android::hardware::automotive::vehicle::gborges {
 
 namespace {
@@ -31,9 +37,18 @@ PropertyProviderRegistry::~PropertyProviderRegistry() {
                 return statusFromException(EX_ILLEGAL_ARGUMENT, "property already claimed");
             }
         }
+
+        ProviderEntry entry;
+        entry.flags = provider->flags();
+        if (hasFlag(entry.flags, ProviderFlags::WRITE)) {
+            for (const auto& key : provider->listenedSignals()) {
+                entry.listened.insert(key);
+            }
+        }
+
         if (mOnUpdate) {
             auto upstream = mOnUpdate;
-            ProviderFlags flags = provider->flags();
+            ProviderFlags flags = entry.flags;
             const std::string nameForLog = provider->name();
             provider->setUpdateCallback([upstream, flags, nameForLog](
                                                 aidlvhal::VehiclePropValue v) {
@@ -45,14 +60,24 @@ PropertyProviderRegistry::~PropertyProviderRegistry() {
                 upstream(std::move(v), flags);
             });
         }
+
         IPropertyProvider* raw = provider.get();
         for (const auto& key : claims) {
             mIndex[key] = raw;
         }
-        ALOGI("registered provider '%s' for %zu properties (flags=0x%x)",
-              provider->name().c_str(), claims.size(),
-              static_cast<unsigned>(provider->flags()));
-        mProviders.push_back(std::move(provider));
+        for (const auto& key : entry.listened) {
+            mFanOutIndex[key].push_back(raw);
+        }
+        if (hasFlag(entry.flags, ProviderFlags::WRITE) &&
+            hasFlag(entry.flags, ProviderFlags::ACCEPT_ALL_WRITES)) {
+            mBroadcastWriters.push_back(raw);
+        }
+
+        ALOGI("registered provider '%s' for %zu claims, %zu listened (flags=0x%x)",
+              provider->name().c_str(), claims.size(), entry.listened.size(),
+              static_cast<unsigned>(entry.flags));
+        entry.ptr = std::move(provider);
+        mProviders.push_back(std::move(entry));
     }
     return ::ndk::ScopedAStatus::ok();
 }
@@ -61,11 +86,11 @@ void PropertyProviderRegistry::setOnUpdate(OnUpdate cb) {
     std::lock_guard lg(mLock);
     mOnUpdate = std::move(cb);
     auto upstream = mOnUpdate;
-    for (auto& p : mProviders) {
-        ProviderFlags flags = p->flags();
-        const std::string nameForLog = p->name();
-        p->setUpdateCallback([upstream, flags, nameForLog](
-                                     aidlvhal::VehiclePropValue v) {
+    for (auto& e : mProviders) {
+        ProviderFlags flags = e.flags;
+        const std::string nameForLog = e.ptr->name();
+        e.ptr->setUpdateCallback([upstream, flags, nameForLog](
+                                         aidlvhal::VehiclePropValue v) {
             if (!hasFlag(flags, ProviderFlags::READ)) {
                 ALOGV("dropping update from '%s' (READ=0): prop=0x%x",
                       nameForLog.c_str(), v.prop);
@@ -77,22 +102,34 @@ void PropertyProviderRegistry::setOnUpdate(OnUpdate cb) {
 }
 
 ::ndk::ScopedAStatus PropertyProviderRegistry::startAll() {
-    std::lock_guard lg(mLock);
-    for (auto& p : mProviders) {
-        auto st = p->start();
-        if (!st.isOk()) {
-            ALOGE("provider '%s' failed to start: %s",
-                  p->name().c_str(), st.getDescription().c_str());
-            return st;
+    bool anyRequiredFailed = false;
+    {
+        std::lock_guard lg(mLock);
+        for (auto& e : mProviders) {
+            auto st = e.ptr->start();
+            if (!st.isOk()) {
+                ALOGE("provider '%s' failed to start: %s",
+                      e.ptr->name().c_str(), st.getDescription().c_str());
+                if (hasFlag(e.flags, ProviderFlags::REQUIRED)) {
+                    anyRequiredFailed = true;
+                }
+            }
         }
     }
+#if GBORGES_VHAL_STRICT_PROVIDERS
+    if (anyRequiredFailed) {
+        return statusFromException(EX_SERVICE_SPECIFIC, "required provider startup failed");
+    }
+#else
+    (void)anyRequiredFailed;
+#endif
     return ::ndk::ScopedAStatus::ok();
 }
 
 void PropertyProviderRegistry::stopAll() {
     std::lock_guard lg(mLock);
-    for (auto& p : mProviders) {
-        (void)p->stop();
+    for (auto& e : mProviders) {
+        (void)e.ptr->stop();
     }
 }
 
@@ -108,22 +145,57 @@ bool PropertyProviderRegistry::isOwned(int32_t propId, int32_t areaId) const {
 }
 
 ::ndk::ScopedAStatus PropertyProviderRegistry::writeValue(const aidlvhal::VehiclePropValue& value) {
-    IPropertyProvider* p;
+    // Stack-allocated dedup buffer; keeps the hot path alloc-free for the
+    // common case (1–3 recipients per write).
+    std::array<IPropertyProvider*, 8> recipients{};
+    size_t n = 0;
+    auto pushUnique = [&](IPropertyProvider* p) {
+        if (!p || n == recipients.size()) return;
+        for (size_t i = 0; i < n; ++i) {
+            if (recipients[i] == p) return;
+        }
+        recipients[n++] = p;
+    };
+
+    auto findEntry = [&](IPropertyProvider* p) -> ProviderEntry* {
+        for (auto& e : mProviders) {
+            if (e.ptr.get() == p) return &e;
+        }
+        return nullptr;
+    };
+
     {
         std::lock_guard lg(mLock);
-        auto it = mIndex.find(PropIdAreaId{value.prop, value.areaId});
-        if (it == mIndex.end()) {
-            return statusFromException(EX_ILLEGAL_ARGUMENT, "no provider for property");
+        const PropIdAreaId key{value.prop, value.areaId};
+
+        if (auto it = mIndex.find(key); it != mIndex.end()) {
+            if (auto* e = findEntry(it->second);
+                e && hasFlag(e->flags, ProviderFlags::WRITE)) {
+                pushUnique(it->second);
+            }
         }
-        p = it->second;
+        if (auto it = mFanOutIndex.find(key); it != mFanOutIndex.end()) {
+            for (IPropertyProvider* p : it->second) {
+                if (auto* e = findEntry(p);
+                    e && hasFlag(e->flags, ProviderFlags::WRITE)) {
+                    pushUnique(p);
+                }
+            }
+        }
+        for (IPropertyProvider* p : mBroadcastWriters) {
+            pushUnique(p);
+        }
     }
-    if (!hasFlag(p->flags(), ProviderFlags::WRITE)) {
-        // Silent OK so VehicleHardware's cache update still proceeds without an ALOGW.
-        ALOGV("skipping writeValue to '%s' (WRITE=0): prop=0x%x area=%d",
-              p->name().c_str(), value.prop, value.areaId);
+
+    if (n == 0) {
+        // No registered recipient. Match the historical behaviour for
+        // non-owned writes: silently OK (cache update still happens upstream).
         return ::ndk::ScopedAStatus::ok();
     }
-    return p->writeValue(value);
+    for (size_t i = 0; i < n; ++i) {
+        (void)recipients[i]->writeValue(value);
+    }
+    return ::ndk::ScopedAStatus::ok();
 }
 
 void PropertyProviderRegistry::onSubscribe(int32_t propId, int32_t areaId, float sampleRateHz) {
